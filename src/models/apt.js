@@ -19,6 +19,14 @@ const Apt = mongoose.model('Apt', {
         type:String,
         required: true,
         trim:true
+    },
+    owner: {
+        type: mongoose.Schema.Types.ObjectId,
+        required: true
+    },
+    comments:{
+      type: Array,
+      required:false
     }
 })
 

@@ -22,6 +22,14 @@ const Ad = mongoose.model('Ad', {
     post_by: {
         type:String, 
         required: true
+    },
+    owner: {
+        type: mongoose.Schema.Types.ObjectId,
+        required: true
+    },
+    comments:{
+      type: Array,
+      required:false
     }
 })
 

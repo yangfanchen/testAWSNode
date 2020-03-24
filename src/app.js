@@ -5,6 +5,7 @@ const multer = require('multer')
 const User = require('./models/user')
 const Apt = require('./models/apt')
 const Ad = require('./models/ad')
+const auth = require('../src/middleware/auth')
 require('./db/mongoose')
 const app = express()
 console.log(__dirname);
@@ -21,11 +22,12 @@ app.post('/apts/:id/upload',upload.single('upload'), (req, res) => {
 })
 //use the public directory to access the html, css and javascript.
 const publicDirectory = path.join(__dirname,'../public')
-const viewsPath = path.join(__dirname,'../templates/views')
+console.log(__dirname);
+const viewsPath = path.join(__dirname,'/views')
 const partialsPath = path.join(__dirname, '../templates/partials')
 
 app.use(express.json())
-app.set('view engine', 'hbs')
+app.set('view engine', 'ejs')
 app.set('views', viewsPath)
 hbs.registerPartials(partialsPath)
 
@@ -33,30 +35,63 @@ app.use(express.static(publicDirectory))
 
 app.get('/',(req,res) => {
     //res.send('This is a house renting web services')
-    res.render('index', {
-        title: 'test',
-        name:'something'
-    })
+    res.render('index')
 })
 
-app.post('/user', (req, res) => {
+app.post('/user',async  (req, res) => {
     const user = new User(req.body)
-
-    user.save().then( () => {
-        res.send(user)
+    console.log(req.body.name)
+    const exist = await User.findOne({name:req.body.name})
+    
+    if(exist) {
+        res.status(400).send()
+    } else {
+    user.save().then( async() => {
+        const Authtoken = await user.AuthToken()
+        res.send({user,Authtoken })
     }).catch((e) => {
         res.status(400)
         res.send(e)
     })
+    }
 })
 
-app.get('/users',(req,res) => {
-    User.find({}).then( (users) => {
-        res.send(users);
-    }).catch ((e) => {
-        res.status(500).send()
-    })
+app.post('/user/login', async (req,res) => {
+    try{
+        const user = await User.Validation(req.body.name, req.body.password)
+        const Authtoken = await user.AuthToken()
+        res.send({user, Authtoken})
+    }catch (e) {
+        res.status(400).send()
+    }
 })
+
+app.post('/users/this/logout',auth,async (req,res) => {
+    try{
+        req.user.AuthTokens = req.user.AuthTokens.filter((token) => {
+            return token.AuthToken !== req.token
+        })
+        await req.user.save()
+        res.send()
+    }catch(e) {
+        res.status(500).send()
+    }
+})
+
+app.post('/users/this/logoutAllSession',auth, async (req,res)=> {
+    try{
+        req.user.AuthTokens = []
+        await req.user.save()
+        res.send()
+    }catch(e){
+        res.status(500).send()
+    }
+})
+
+app.get('/users/this',auth,async (req,res) => {
+    res.send(req.user)
+})
+
 
 app.get('/users/:id', (req, res) => {
     const _id = req.params.id
@@ -71,25 +106,20 @@ app.get('/users/:id', (req, res) => {
     })
 })
 
-app.delete('/users/:id', async (req, res) => {
-    const _id = req.params.id
-
+app.delete('/users/this',auth, async (req, res) => {
     try {
-        const user = await User.findByIdAndDelete(req.params.id)
-        if(!user) {
-            res.status(400).send()
-        }
-        res.send({success:'deletion operation successfully.'})
+        await req.user.remove()
+        res.send(req.user)
     }catch (e) {
         res.status(400).send(e)
     }
 })
 
-app.delete('/ads/:id', async (req, res) => {
+app.delete('/ads/:id',auth,async (req, res) => {
     const _id = req.params.id
 
     try {
-        const ad = await Ad.findByIdAndDelete(req.params.id)
+        const ad = await Ad.findOneAndDelete({_id: req.params.id, owner: req.user._id})
         if(!ad) {
             res.status(400).send()
         }
@@ -99,9 +129,9 @@ app.delete('/ads/:id', async (req, res) => {
     }
 })
 
-app.patch('/users/:id', async (req, res) => {
+app.patch('/users/this',auth, async (req, res) => {
     const updates = Object.keys(req.body)
-    const allowedUpdates = ['name','age','email']
+    const allowedUpdates = ['name','age','email','password']
     const isValid = updates.every((update) => allowedUpdates.includes(update))
 
     if(!isValid){
@@ -109,12 +139,9 @@ app.patch('/users/:id', async (req, res) => {
     }
 
     try {
-        const user = await User.findByIdAndUpdate(req.params.id,req.body, {new: true, runValidators: true})
-        
-        if(!user) {
-            return res.status(400).send()
-        }
-        res.send(user)
+        updates.forEach((update) => req.user[update] = req.body[update])
+        await req.user.save()
+        res.send(req.user)
     } catch (e) {
         res.status(400).send(e);
     }
@@ -131,11 +158,13 @@ app.patch('/ads/:id', async (req, res) => {
     }
 
     try {
-        const ad = await Ad.findByIdAndUpdate(req.params.id,req.body, {new: true, runValidators: true})
-        
+        //const ad = await Ad.findByIdAndUpdate(req.params.id,req.body, {new: true, runValidators: true})
+        const ad = await Ad.findOne({_id:req.params.id, owner:req.user._id})
         if(!ad) {
-            return res.status(400).send()
+            return res.status(404).send()
         }
+        updates.forEach((update) => ad[update]=req.body[update])
+        await ad.save()
         res.send(ad)
     } catch (e) {
         res.status(400).send(e);
@@ -144,8 +173,12 @@ app.patch('/ads/:id', async (req, res) => {
 
 
 
-app.post('/apt', (req, res) => {
-    const apt = new Apt(req.body)
+app.post('/apt',auth,async (req, res) => {
+    // const apt = new Apt(req.body)
+    const apt = new Apt({
+        ...req.body,
+        owner: req.user._id
+    })
     apt.save().then( () => {
         res.send(apt)
     }).catch ((e) => {
@@ -194,8 +227,48 @@ app.get('/ads/:id', (req,res) => {
     })
 })
 
-app.post('/ad', (req, res) => {
-    const ad = new Ad(req.body)
+app.post('/ads/:id/comment', (req,res) =>{
+    const _id = req.params.id
+    console.log(_id)
+    console.log(req.body)
+    Ad.findOne({_id}).then(async (ad) => {
+        if(!ad) {
+            res.status(404).send()
+        }else{
+            ad.comments.push(req.body.comment)
+            await ad.save()
+            res.status(200).send({success:"post comments successfully"})
+        }
+    }).catch( (e) => {
+        console.log(e)
+        res.status(500).send(e)
+    })
+})
+
+
+app.post('/apts/:id/comment', (req,res) =>{
+    const _id = req.params.id
+    console.log(_id)
+    console.log(req.body)
+    Apt.findOne({_id}).then(async (apt) => {
+        if(!apt) {
+            res.status(404).send()
+        }else{
+            apt.comments.push(req.body.comment)
+            await apt.save()
+            res.status(200).send({success:"post comments successfully"})
+        }
+    }).catch( (e) => {
+        res.status(500).send(e)
+    })
+})
+
+app.post('/ad',auth,async (req, res) => {
+    // const ad = new Ad(req.body)
+    const ad = new Ad({
+        ...req.body,
+        owner: req.user._id
+    })
     ad.save().then( () => {
         res.send(ad)
     }).catch ((e) => {
@@ -204,11 +277,7 @@ app.post('/ad', (req, res) => {
     })
 })
 
-
-app.get('/apts', (req,res) => {
-    console.log(req);
-    res.send('This will return a list of apartments available for rental in campus');
-})
+ 
 
 
 app.get('/apts/2', (req,res) => {
@@ -218,9 +287,6 @@ app.get('/apts/2', (req,res) => {
     })
 })
 
-app.get('/ads', (req,res) => {
-    res.send('This will return a list of apartments available for rental outside campus');
-})
 
 app.get('*', (req, res) => {
     res.render('404', {
